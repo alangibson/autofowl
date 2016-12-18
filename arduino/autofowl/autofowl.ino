@@ -2,22 +2,29 @@
 #include <LiquidCrystal.h>
 #include <Stepper.h>
 #include <AccelStepper.h>
+#include <Wire.h>
+#include "RTClib.h"
 
 const int INT_MAX = 32767;
 const int NONE = -1;
 const int TICK = 150; // microseconds
+const int EEPROM_UNINIT_VALUE = -1;
 
 const int BUTTON_UP = LOW;
 const int BUTTON_DOWN = HIGH;
 
 // Run modes
-const int MODE_DISABLED         = 0;
-const int MODE_AUTO             = 1;
-const int MODE_MANUAL           = 2;
-const int MODE_SET_CLOSE_THRESH = 3;
-const int MODE_SET_OPEN_THRESH  = 4;
-const int MODE_MIN              = MODE_DISABLED;
-const int MODE_MAX              = MODE_SET_OPEN_THRESH;
+const int MODE_DISABLED                     = 0;
+const int MODE_AUTO                         = 1;
+const int MODE_MANUAL                       = 2;
+const int MODE_SET_CLOSE_THRESH             = 3;
+const int MODE_SET_OPEN_THRESH              = 4;
+const int MODE_SET_CLOCK_CLOSE_HOUR_THRESH  = 5;
+const int MODE_SET_CLOCK_CLOSE_MIN_THRESH   = 6;
+const int MODE_SET_CLOCK_OPEN_HOUR_THRESH   = 7;
+const int MODE_SET_CLOCK_OPEN_MIN_THRESH    = 8;
+const int MODE_MIN                          = MODE_DISABLED;
+const int MODE_MAX                          = MODE_SET_CLOCK_OPEN_MIN_THRESH;
 
 // Door positions
 const int DOOR_POSITION_UNKNOWN = 0;
@@ -32,11 +39,15 @@ const int DOOR_MOVING_UP        = 1;
 const int DOOR_MOVING_DOWN      = 2;
 
 // EEPROM addresses
-const int DOOR_POSITION_ADDRESS     = 0;
-const int CURRENT_MODE_ADDRESS      = 1;
-const int LIGHT_THRESH_DOWN_ADDRESS = 3;
-const int LIGHT_THRESH_UP_ADDRESS   = 4;
-const int EEPROM_UNSET              = 255;
+const int DOOR_POSITION_ADDRESS           = 0;
+const int CURRENT_MODE_ADDRESS            = 1;
+const int LIGHT_THRESH_DOWN_ADDRESS       = 3;
+const int LIGHT_THRESH_UP_ADDRESS         = 4;
+const int CLOCK_HOUR_THRESH_UP_ADDRESS    = 5;
+const int CLOCK_MIN_THRESH_UP_ADDRESS     = 6;
+const int CLOCK_HOUR_THRESH_DOWN_ADDRESS  = 7;
+const int CLOCK_MIN_THRESH_DOWN_ADDRESS   = 8;
+const int EEPROM_UNSET                    = 255;
 
 // Motor constants
 const int MOTOR_RPMS            = 60;
@@ -47,18 +58,21 @@ const int LIGHT_THRESH_TICKS_TO_CHANGE = 100;
 // Motor constants
 const int STEPS_PER_REVOLUTION = 200;
 
+// Number of minutes to increment per click
+const int CLOCK_MIN_INCREMENT = 15;
+
 // Door-specific constants
 // Number of revolutions to fully change door position
 const int REVOLUTIONS_TO_CHANGE   = 100;
 
 // Pins
 // Arduino Uno / Buttons
-const int PIN_MODE_BUTTON = 8;
-const int PIN_UP_BUTTON   = 10;
-const int PIN_DOWN_BUTTON = 9;
+const int PIN_MODE_BUTTON = 6;
+const int PIN_UP_BUTTON   = 8;
+const int PIN_DOWN_BUTTON = 7;
 // Arduino Uno / LCD screen
-const int PIN_LCD_RS      = 12;
-const int PIN_LCD_ENABLE  = 11;
+const int PIN_LCD_RS      = A1;
+const int PIN_LCD_ENABLE  = A2;
 const int PIN_LCD_D4      = 5;
 const int PIN_LCD_D5      = 4;
 const int PIN_LCD_D6      = 3;
@@ -66,10 +80,10 @@ const int PIN_LCD_D7      = 2;
 // Arduino Uno / Photocell
 const int PIN_PHOTOCELL   = A0;
 // Arduino Uno / Motor controller
-const int PIN_MOTOR_1     = A1; // pin 2 on L293D
-const int PIN_MOTOR_2     = A2; // pin 7 on L293D
-const int PIN_MOTOR_3     = A3; // pin 15 on L293D
-const int PIN_MOTOR_4     = A4; // pin 10 on L293D
+const int PIN_MOTOR_1     = 13; // pin 2 on L293D
+const int PIN_MOTOR_2     = 12; // pin 7 on L293D
+const int PIN_MOTOR_3     = 11; // pin 15 on L293D
+const int PIN_MOTOR_4     = 10; // pin 10 on L293D
 
 // Global State variables
 int CurrentMode           = MODE_AUTO;
@@ -88,12 +102,19 @@ int LightLast             = LightCurrent;  // Last reading
 int LightThreshUp         = 100;
 int LightThreshDown       = 10;
 int LightThreshTicks      = 0;              // Ticks needed to start door position change
+// Used for clock
+DateTime Now;
+TimeSpan ClockThreshUp;
+TimeSpan ClockThreshDown;
 
 // Initialize the LCD 
 LiquidCrystal Lcd(PIN_LCD_RS, PIN_LCD_ENABLE, PIN_LCD_D4, PIN_LCD_D5, PIN_LCD_D6, PIN_LCD_D7);
 
 // Initialize the stepper motor controller
 AccelStepper Motor(AccelStepper::FULL4WIRE, PIN_MOTOR_1, PIN_MOTOR_2, PIN_MOTOR_3, PIN_MOTOR_4, true);
+
+// Declare the clock
+RTC_DS1307 RTC;
 
 void setup() {
   
@@ -118,6 +139,26 @@ void setup() {
   // Print a message to the LCD.
   Lcd.print("eCoop v2.0");
 
+  // Start the Real Time Clock
+  Wire.begin();
+  RTC.begin();
+  // Check to see if the RTC is keeping time.  If it is, load the time from your computer.
+  if (! RTC.isrunning()) {
+    Serial.println("RTC is NOT running! Adjusting time now.");
+    // This will reflect the time that your sketch was compiled
+    RTC.adjust(DateTime(__DATE__, __TIME__));
+  }
+
+  // Read clock settings from EEPROM
+  ClockThreshUp = TimeSpan(0,
+    EEPROM.read((CLOCK_HOUR_THRESH_UP_ADDRESS) == -1) ? 0 : EEPROM.read(CLOCK_HOUR_THRESH_UP_ADDRESS),
+    EEPROM.read((CLOCK_MIN_THRESH_UP_ADDRESS) == -1) ? 0 : EEPROM.read(CLOCK_MIN_THRESH_UP_ADDRESS),
+    0 );
+  ClockThreshDown = TimeSpan(0,
+    EEPROM.read((CLOCK_HOUR_THRESH_DOWN_ADDRESS) == -1) ? 0 : EEPROM.read(CLOCK_HOUR_THRESH_DOWN_ADDRESS),
+    EEPROM.read((CLOCK_MIN_THRESH_DOWN_ADDRESS) == -1) ? 0 : EEPROM.read(CLOCK_MIN_THRESH_DOWN_ADDRESS),
+    0 );
+    
   // Set up the motor
   Motor.setSpeed( ( MOTOR_RPMS / 60 ) * STEPS_PER_REVOLUTION );
 
@@ -149,7 +190,9 @@ void loop() {
   // Handle pressed buttons
   handleButton();
 
-  handleLight();
+  handleTriggers();
+
+  debug();
   
   // Sleep to avoid busy wait
   delay(TICK);
@@ -228,12 +271,16 @@ void handleButtonUp() {
     }
   } else if ( CurrentMode == MODE_SET_OPEN_THRESH ) {
     LightThreshUp++;
-    Serial.print("MODE_SET_OPEN_THRESH ");
-    Serial.println(LightThreshUp);
   } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
     LightThreshDown++;
-    Serial.print("MODE_SET_CLOSE_THRESH ");
-    Serial.println(LightThreshDown);
+  } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH ) {
+    ClockThreshDown = TimeSpan(0, ClockThreshDown.hours() + 1, ClockThreshDown.minutes(), 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_MIN_THRESH ) {
+    ClockThreshDown = TimeSpan(0, ClockThreshDown.hours(), ClockThreshDown.minutes() + CLOCK_MIN_INCREMENT, 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_OPEN_HOUR_THRESH ) {
+    ClockThreshUp = TimeSpan(0, ClockThreshUp.hours() + 1, ClockThreshUp.minutes(), 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_OPEN_MIN_THRESH ) {
+    ClockThreshUp = TimeSpan(0, ClockThreshUp.hours(), ClockThreshUp.minutes() + CLOCK_MIN_INCREMENT, 0);
   }
 }
 
@@ -249,18 +296,23 @@ void handleButtonDown() {
     }
   } else if ( CurrentMode == MODE_SET_OPEN_THRESH ) {
     LightThreshUp = LightThreshUp - 1;
-    Serial.print("MODE_SET_OPEN_THRESH ");
-    Serial.println(LightThreshUp);
   } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
     LightThreshDown = LightThreshDown - 1;
-    Serial.print("MODE_SET_CLOSE_THRESH ");
-    Serial.println(LightThreshDown);
+  } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH ) {
+    ClockThreshDown = TimeSpan(0, ClockThreshDown.hours() - 1, ClockThreshDown.minutes(), 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_MIN_THRESH ) {
+    ClockThreshDown = TimeSpan(0, ClockThreshDown.hours(), ClockThreshDown.minutes() - CLOCK_MIN_INCREMENT, 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_OPEN_HOUR_THRESH ) {
+    ClockThreshUp = TimeSpan(0, ClockThreshUp.hours() - 1, ClockThreshUp.minutes(), 0);
+  } else if ( CurrentMode == MODE_SET_CLOCK_OPEN_MIN_THRESH ) {
+    ClockThreshUp = TimeSpan(0, ClockThreshUp.hours(), ClockThreshUp.minutes() - CLOCK_MIN_INCREMENT, 0);
   }
 }
 
-void handleLight() {
+void handleTriggers() {
   
   updateLight();
+  updateTime();
 
   if ( LightLast != LightCurrent ) {
     updateLCD();
@@ -270,9 +322,9 @@ void handleLight() {
   if ( CurrentMode != MODE_AUTO ) {
     return;
   }
-  
+
   // Determine if door should move up or down
-  if ( LightCurrent > LightThreshUp ) {
+  if ( LightCurrent > LightThreshUp || totalseconds(Now) > ClockThreshUp.totalseconds() ) {
 
     // See if we could potentially change door position
     // If not, there's nothing else to do here
@@ -288,7 +340,7 @@ void handleLight() {
       // Done moving door so reset ticks
       LightThreshTicks = 0;
     }
-  } else if ( LightCurrent < LightThreshDown ) {
+  } else if ( LightCurrent < LightThreshDown || totalseconds(Now) < ClockThreshDown.totalseconds() ) {
 
     // See if we could potentially change door position
     // If not, there's nothing else to do here
@@ -313,6 +365,10 @@ void handleLight() {
 void updateLight() {
   LightLast = LightCurrent;
   LightCurrent = analogRead(PIN_PHOTOCELL);
+}
+
+void updateTime() {
+  Now = RTC.now(); 
 }
 
 void openDoor() {
@@ -425,11 +481,16 @@ void updateLCD() {
     // Render settings
 
     // Render first line
-    Lcd.print("Set: ");
     if ( CurrentMode == MODE_SET_OPEN_THRESH ) {
       Lcd.print("Open Threshold");
     } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
       Lcd.print("Close Threshold");
+    } else if (CurrentMode == MODE_SET_CLOCK_OPEN_HOUR_THRESH || CurrentMode == MODE_SET_CLOCK_OPEN_MIN_THRESH) {
+      Lcd.print("Open Time Threshold");
+    } else if (CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH || CurrentMode == MODE_SET_CLOCK_CLOSE_MIN_THRESH) {
+      Lcd.print("Close Time Threshold");
+    } else {
+      Lcd.print("Unknown Mode");
     }
 
     // Render second line
@@ -438,6 +499,18 @@ void updateLCD() {
       Lcd.print(LightThreshUp);
     } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
       Lcd.print(LightThreshDown);
+    } else if (CurrentMode == MODE_SET_CLOCK_OPEN_HOUR_THRESH || CurrentMode == MODE_SET_CLOCK_OPEN_MIN_THRESH) {
+      Lcd.print(ClockThreshUp.hours());
+      Lcd.print(":");
+      Lcd.print(ClockThreshUp.minutes());
+      Lcd.print(":");
+      Lcd.print(ClockThreshUp.seconds());
+    } else if (CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH || CurrentMode == MODE_SET_CLOCK_CLOSE_MIN_THRESH) {
+      Lcd.print(ClockThreshDown.hours());
+      Lcd.print(":");
+      Lcd.print(ClockThreshDown.minutes());
+      Lcd.print(":");
+      Lcd.print(ClockThreshDown.seconds());
     }
   }
 }
@@ -476,3 +549,43 @@ char prettyDoorPosition() {
 int prettyTicksToChange() {
   return ( LightThreshTicks / (float) LIGHT_THRESH_TICKS_TO_CHANGE ) * 10;
 }
+
+int32_t totalseconds(DateTime timestamp) {
+  return ( timestamp.hour() * 360 ) + ( timestamp.minute() * 60 ) + timestamp.second(); 
+}
+
+/**
+ * Writes debug info to serial
+ */
+void debug() {
+  Serial.print('[');
+  Serial.print(Now.hour(), DEC);
+  Serial.print(':');
+  Serial.print(Now.minute(), DEC);
+  Serial.print(':');
+  Serial.print(Now.second(), DEC);
+  Serial.print(']');
+
+  Serial.print(" LightThreshUp=");
+  Serial.print(LightThreshUp);
+  Serial.print(" LightCurrent=");
+  Serial.print(LightThreshDown);
+  Serial.print(" LightCurrent=");
+  Serial.print(LightThreshDown);
+
+  Serial.print(" ClockThreshUp=");
+  Serial.print(ClockThreshUp.hours(), DEC);
+  Serial.print(':');
+  Serial.print(ClockThreshUp.minutes(), DEC);
+  Serial.print(':');
+  Serial.print(ClockThreshUp.seconds(), DEC);
+  Serial.print(" ClockThreshDown=");
+  Serial.print(ClockThreshDown.hours(), DEC);
+  Serial.print(':');
+  Serial.print(ClockThreshDown.minutes(), DEC);
+  Serial.print(':');
+  Serial.print(ClockThreshDown.seconds(), DEC);
+
+  Serial.println();
+}
+
