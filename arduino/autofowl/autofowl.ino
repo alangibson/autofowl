@@ -184,7 +184,7 @@ void setup() {
   );
 
   // Set the motors desired constant speed in steps per second
-  Motor.setSpeed( MOTOR_SPEED_STEPS_PER_SECOND );
+  Motor.setMaxSpeed( MOTOR_SPEED_STEPS_PER_SECOND );
   // Set the motors desired acceleration in steps per second per second
   Motor.setAcceleration(MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC);
 
