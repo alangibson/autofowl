@@ -60,6 +60,8 @@ const int MOTOR_MAX_RPMS                    = 60;
 const int STEPS_PER_REVOLUTION              = 200;
 const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
 const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
+// Disable motor driver when stopped. Decreases power consumption and heat from motor. 0 = no, 1 = yes.
+const int MOTOR_DISABLE_ON_STOP             = 1;
 
 // Number of ticks beyond threshold to wait before changing door position
 const int LIGHT_THRESH_TICKS_TO_CHANGE      = 100;
@@ -87,12 +89,13 @@ const int PIN_LCD_D6      = 3;
 const int PIN_LCD_D7      = 2;
 const int PIN_LCD_BL      = 9;
 // Arduino Uno / Photocell
-const int PIN_PHOTOCELL   = A0;
+const int PIN_PHOTOCELL     = A0;
 // Arduino Uno / Motor controller
-const int PIN_MOTOR_1     = 13; // pin 2 on L293D
-const int PIN_MOTOR_2     = 12; // pin 7 on L293D
-const int PIN_MOTOR_3     = 11; // pin 15 on L293D
-const int PIN_MOTOR_4     = 10; // pin 10 on L293D
+const int PIN_MOTOR_1       = 13; // pin 2 on L293D
+const int PIN_MOTOR_2       = 12; // pin 7 on L293D
+const int PIN_MOTOR_3       = 11; // pin 15 on L293D
+const int PIN_MOTOR_4       = 10; // pin 10 on L293D
+const int PIN_MOTOR_ENABLE  = A3;
 
 // --------------------------------------
 // -- Runtime variables
@@ -146,7 +149,11 @@ void setup() {
   pinMode(PIN_MOTOR_2,      OUTPUT);
   pinMode(PIN_MOTOR_3,      OUTPUT);
   pinMode(PIN_MOTOR_4,      OUTPUT);
+  pinMode(PIN_MOTOR_ENABLE, OUTPUT);
   pinMode(PIN_LCD_BL,       OUTPUT);
+
+  // Motor is disabled by default
+  disableMotor();
 
   // Set backlight brightness
   analogWrite(PIN_LCD_BL, 30); // 0 = off, 255 = fully on
@@ -363,13 +370,13 @@ void handleTriggers() {
 
   // Determine if door should move up or down
   if ( LightCurrent > LightThreshUp || totalseconds(Now) > ClockThreshUp.totalseconds() ) {
-
+    
     // See if we could potentially change door position
     // If not, there's nothing else to do here
     if ( DoorPosition == DOOR_POSITION_UP ) {
       return;
     }
-
+  
     LightThreshTicks++;
     updateLCD();
     if ( LightThreshTicks > LIGHT_THRESH_TICKS_TO_CHANGE ) {
@@ -444,15 +451,19 @@ void moveDoor(int revolutions) {
   // Set the motor target position i.e. number of steps to move
   Motor.move(revolutions * (long) STEPS_PER_REVOLUTION);
 
+  enableMotor();
+
   // Start stepping motor
   while (true) {
 
     // Handle buttons to allow abort
     handleButton();
 
-    // Eject from loop if we stopped the door manually
+    // Eject from loop if we stopped the door manually via handleButton() calling stopDoor()
     if ( DoorDirection == DOOR_STATIONARY ) {
-      // Reset the stepper library
+      // Tell AccelStepper to stop and reset its position counter
+      Motor.setCurrentPosition(0);
+      // This break is redundant because Motor.run() will return false past here
       break;
     }
 
@@ -462,6 +473,8 @@ void moveDoor(int revolutions) {
       break;
     }
   }
+
+  disableMotor();
 }
 
 // Stop door motion
@@ -469,6 +482,14 @@ void stopDoor() {
   // Update status
   DoorDirection = DOOR_STATIONARY;
   EEPROM.write(DOOR_POSITION_ADDRESS, DoorPosition);
+}
+
+void enableMotor() {
+  digitalWrite(PIN_MOTOR_ENABLE, 1);
+}
+
+void disableMotor() {
+  digitalWrite(PIN_MOTOR_ENABLE, MOTOR_DISABLE_ON_STOP);
 }
 
 bool doorIsMoving() {
@@ -605,7 +626,7 @@ void debug() {
 
   Serial.print(" LightThreshUp=");
   Serial.print(LightThreshUp);
-  Serial.print(" LightCurrent=");
+  Serial.print(" LightThreshDown=");
   Serial.print(LightThreshDown);
   Serial.print(" LightCurrent=");
   Serial.print(LightThreshDown);
@@ -623,6 +644,14 @@ void debug() {
   Serial.print(':');
   Serial.print(ClockThreshDown.seconds(), DEC);
 
+  Serial.print(" CurrentMode=");
+  Serial.print(prettyMode());
+
+  Serial.print(" DoorPosition=");
+  Serial.print(prettyDoorPosition());
+  Serial.print(" DoorDirection=");
+  Serial.print(prettyDoorDirection());
+  
   Serial.println();
 }
 #endif
