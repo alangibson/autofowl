@@ -5,17 +5,19 @@
 #include <Wire.h>
 #include <RTClib.h>
 
+#define DEBUG 1
+
 // --------------------------------------
 // -- Constants
 // --------------------------------------
 
-const int INT_MAX               = 32767;
-const int NONE                  = -1;
-const int TICK                  = 150; // microseconds
-const byte EEPROM_UNINIT_VALUE  = -1;
+const int INT_MAX                           = 32767;
+const int NONE                              = -1;
+const int TICK                              = 150; // microseconds
+const byte EEPROM_UNINIT_VALUE              = -1;
 
-const int BUTTON_UP   = LOW;
-const int BUTTON_DOWN = HIGH;
+const int BUTTON_UP                         = LOW;
+const int BUTTON_DOWN                       = HIGH;
 
 // Run modes
 const int MODE_DISABLED                     = 0;
@@ -31,43 +33,45 @@ const int MODE_MIN                          = MODE_DISABLED;
 const int MODE_MAX                          = MODE_SET_CLOCK_OPEN_MIN_THRESH;
 
 // Door positions
-const int DOOR_POSITION_UNKNOWN = 0;
-const int DOOR_POSITION_UP      = 1;
-const int DOOR_POSITION_DOWN    = 2;
-const int DOOR_POSITION_MAX     = DOOR_POSITION_DOWN;
-const int DOOR_POSITION_MIN     = DOOR_POSITION_UNKNOWN;
+const int DOOR_POSITION_UNKNOWN             = 0;
+const int DOOR_POSITION_UP                  = 1;
+const int DOOR_POSITION_DOWN                = 2;
+const int DOOR_POSITION_MAX                 = DOOR_POSITION_DOWN;
+const int DOOR_POSITION_MIN                 = DOOR_POSITION_UNKNOWN;
 
 // Door motion directions
-const int DOOR_STATIONARY       = 0;
-const int DOOR_MOVING_UP        = 1;
-const int DOOR_MOVING_DOWN      = 2;
+const int DOOR_STATIONARY                   = 0;
+const int DOOR_MOVING_UP                    = 1;
+const int DOOR_MOVING_DOWN                  = 2;
 
 // EEPROM addresses
-const int DOOR_POSITION_ADDRESS           = 0;
-const int CURRENT_MODE_ADDRESS            = 1;
-const int LIGHT_THRESH_DOWN_ADDRESS       = 3;
-const int LIGHT_THRESH_UP_ADDRESS         = 4;
-const int CLOCK_HOUR_THRESH_UP_ADDRESS    = 5;
-const int CLOCK_MIN_THRESH_UP_ADDRESS     = 6;
-const int CLOCK_HOUR_THRESH_DOWN_ADDRESS  = 7;
-const int CLOCK_MIN_THRESH_DOWN_ADDRESS   = 8;
-const int EEPROM_UNSET                    = 255;
+const int DOOR_POSITION_ADDRESS             = 0;
+const int CURRENT_MODE_ADDRESS              = 1;
+const int LIGHT_THRESH_DOWN_ADDRESS         = 3;
+const int LIGHT_THRESH_UP_ADDRESS           = 4;
+const int CLOCK_HOUR_THRESH_UP_ADDRESS      = 5;
+const int CLOCK_MIN_THRESH_UP_ADDRESS       = 6;
+const int CLOCK_HOUR_THRESH_DOWN_ADDRESS    = 7;
+const int CLOCK_MIN_THRESH_DOWN_ADDRESS     = 8;
+const int EEPROM_UNSET                      = 255;
 
 // Motor constants
-const int MOTOR_RPMS            = 60;
-const int STEPS_PER_REVOLUTION  = 200;
+const int MOTOR_MAX_RPMS                    = 60;
+const int STEPS_PER_REVOLUTION              = 200;
+const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
+const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
 
 // Number of ticks beyond threshold to wait before changing door position
-const int LIGHT_THRESH_TICKS_TO_CHANGE = 100;
+const int LIGHT_THRESH_TICKS_TO_CHANGE      = 100;
 // Number to change the light threshold by per button press
-const int LIGHT_THRESH_CHANGE_INCREMENT = 20;
+const int LIGHT_THRESH_CHANGE_INCREMENT     = 20;
 
 // Number of minutes to increment per click
-const int CLOCK_MIN_INCREMENT = 15;
+const int CLOCK_MIN_INCREMENT               = 15;
 
 // Door-specific constants
 // Number of revolutions to fully change door position
-const int REVOLUTIONS_TO_CHANGE = 100;
+const int REVOLUTIONS_TO_CHANGE             = 100;
 
 // Pins
 // Arduino Uno / Buttons
@@ -179,8 +183,10 @@ void setup() {
     0 // seconds
   );
 
-  // Set up the motor
-  Motor.setSpeed( ( MOTOR_RPMS / 60 ) * STEPS_PER_REVOLUTION );
+  // Set the motors desired constant speed in steps per second
+  Motor.setSpeed( MOTOR_SPEED_STEPS_PER_SECOND );
+  // Set the motors desired acceleration in steps per second per second
+  Motor.setAcceleration(MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC);
 
   // Read door position from eeprom
   DoorPosition = EEPROM.read(DOOR_POSITION_ADDRESS);
@@ -214,7 +220,9 @@ void loop() {
   handleTriggers();
 
   // Write debug info to terminal
+  #if DEBUG
   debug();
+  #endif
 
   // Sleep to avoid busy wait
   delay(TICK);
@@ -437,7 +445,6 @@ void moveDoor(int revolutions) {
   Motor.move(revolutions * (long) STEPS_PER_REVOLUTION);
 
   // Start stepping motor
-  // for (int rev = 1; rev <= revolutions; rev++) {
   while (true) {
 
     // Handle buttons to allow abort
@@ -586,6 +593,7 @@ int32_t totalseconds(DateTime timestamp) {
 /**
  * Writes debug info to serial
  */
+#if DEBUG
 void debug() {
   Serial.print('[');
   Serial.print(Now.hour(), DEC);
@@ -617,3 +625,4 @@ void debug() {
 
   Serial.println();
 }
+#endif
