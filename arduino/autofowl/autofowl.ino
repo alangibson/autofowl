@@ -77,25 +77,25 @@ const int REVOLUTIONS_TO_CHANGE             = 100;
 
 // Pins
 // Arduino Uno / Buttons
-const int PIN_MODE_BUTTON = 6;
-const int PIN_UP_BUTTON   = 8;
-const int PIN_DOWN_BUTTON = 7;
+const int PIN_MODE_BUTTON                   = 6;
+const int PIN_UP_BUTTON                     = 8;
+const int PIN_DOWN_BUTTON                   = 7;
 // Arduino Uno / LCD screen
-const int PIN_LCD_RS      = A1;
-const int PIN_LCD_ENABLE  = A2;
-const int PIN_LCD_D4      = 5;
-const int PIN_LCD_D5      = 4;
-const int PIN_LCD_D6      = 3;
-const int PIN_LCD_D7      = 2;
-const int PIN_LCD_BL      = 9;
+const int PIN_LCD_RS                        = A1;
+const int PIN_LCD_ENABLE                    = A2;
+const int PIN_LCD_D4                        = 5;
+const int PIN_LCD_D5                        = 4;
+const int PIN_LCD_D6                        = 3;
+const int PIN_LCD_D7                        = 2;
+const int PIN_LCD_BL                        = 9;
 // Arduino Uno / Photocell
-const int PIN_PHOTOCELL     = A0;
+const int PIN_PHOTOCELL                     = A0;
 // Arduino Uno / Motor controller
-const int PIN_MOTOR_1       = 13; // pin 2 on L293D
-const int PIN_MOTOR_2       = 12; // pin 7 on L293D
-const int PIN_MOTOR_3       = 11; // pin 15 on L293D
-const int PIN_MOTOR_4       = 10; // pin 10 on L293D
-const int PIN_MOTOR_ENABLE  = A3;
+const int PIN_MOTOR_1                       = 13; // pin 2 on L293D
+const int PIN_MOTOR_2                       = 12; // pin 7 on L293D
+const int PIN_MOTOR_3                       = 11; // pin 15 on L293D
+const int PIN_MOTOR_4                       = 10; // pin 10 on L293D
+const int PIN_MOTOR_ENABLE                  = A3; // pin 1 and 9 on L293D
 
 // --------------------------------------
 // -- Runtime variables
