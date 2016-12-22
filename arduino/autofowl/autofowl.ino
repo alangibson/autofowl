@@ -629,7 +629,7 @@ void debug() {
   Serial.print(" LightThreshDown=");
   Serial.print(LightThreshDown);
   Serial.print(" LightCurrent=");
-  Serial.print(LightThreshDown);
+  Serial.print(LightCurrent);
 
   Serial.print(" ClockThreshUp=");
   Serial.print(ClockThreshUp.hours(), DEC);
