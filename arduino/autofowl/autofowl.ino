@@ -61,7 +61,7 @@ const int STEPS_PER_REVOLUTION              = 200;
 const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
 const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
 // Disable motor driver when stopped. Decreases power consumption and heat from motor. 0 = no, 1 = yes.
-const int MOTOR_DISABLE_ON_STOP             = 1;
+const bool MOTOR_DISABLE_ON_STOP            = true;
 
 // Number of ticks beyond threshold to wait before changing door position
 const int LIGHT_THRESH_TICKS_TO_CHANGE      = 100;
@@ -122,6 +122,8 @@ int LightThreshTicks      = 0;             // Ticks needed to start door positio
 DateTime Now;
 TimeSpan ClockThreshUp;
 TimeSpan ClockThreshDown;
+// Is motor enabled or not
+bool MotorEnabled;
 
 // Initialize the LCD
 LiquidCrystal Lcd(PIN_LCD_RS, PIN_LCD_ENABLE, PIN_LCD_D4, PIN_LCD_D5, PIN_LCD_D6, PIN_LCD_D7);
@@ -152,9 +154,6 @@ void setup() {
   pinMode(PIN_MOTOR_ENABLE, OUTPUT);
   pinMode(PIN_LCD_BL,       OUTPUT);
 
-  // Motor is disabled by default
-  disableMotor();
-
   // Set backlight brightness
   analogWrite(PIN_LCD_BL, 30); // 0 = off, 255 = fully on
 
@@ -166,11 +165,8 @@ void setup() {
   // Start the Real Time Clock
   Wire.begin();
   RTC.begin();
-  // Check to see if the RTC is keeping time.  If it is, load the time from your computer.
-  if (! RTC.isrunning()) {
-    // This will reflect the time that your sketch was compiled
-    RTC.adjust(DateTime(__DATE__, __TIME__));
-  }
+  // This will reflect the time that your sketch was compiled
+  RTC.adjust(DateTime(__DATE__, __TIME__));
 
   // Read clock settings from EEPROM
   byte clockHourThreshUp = EEPROM.read(CLOCK_HOUR_THRESH_UP_ADDRESS);
@@ -369,7 +365,7 @@ void handleTriggers() {
   }
 
   // Determine if door should move up or down
-  if ( LightCurrent > LightThreshUp || totalseconds(Now) > ClockThreshUp.totalseconds() ) {
+  if ( LightCurrent > LightThreshUp || between(ClockThreshDown, Now, ClockThreshUp) ) {
     
     // See if we could potentially change door position
     // If not, there's nothing else to do here
@@ -385,7 +381,7 @@ void handleTriggers() {
       // Done moving door so reset ticks
       LightThreshTicks = 0;
     }
-  } else if ( LightCurrent < LightThreshDown || totalseconds(Now) < ClockThreshDown.totalseconds() ) {
+  } else if ( LightCurrent < LightThreshDown || ! between(ClockThreshDown, Now, ClockThreshUp) ) {
 
     // See if we could potentially change door position
     // If not, there's nothing else to do here
@@ -485,11 +481,15 @@ void stopDoor() {
 }
 
 void enableMotor() {
+  MotorEnabled = 1;
   digitalWrite(PIN_MOTOR_ENABLE, 1);
 }
 
 void disableMotor() {
-  digitalWrite(PIN_MOTOR_ENABLE, MOTOR_DISABLE_ON_STOP);
+  MotorEnabled = 0;
+  if (MOTOR_DISABLE_ON_STOP) {
+    digitalWrite(PIN_MOTOR_ENABLE, 0);
+  }
 }
 
 bool doorIsMoving() {
@@ -608,7 +608,11 @@ int prettyTicksToChange() {
 }
 
 int32_t totalseconds(DateTime timestamp) {
-  return ( timestamp.hour() * 360 ) + ( timestamp.minute() * 60 ) + timestamp.second();
+  return ( (int32_t)timestamp.hour() * 3600 ) + ( (int32_t)timestamp.minute() * 60 ) + timestamp.second();
+}
+
+bool between(TimeSpan low, DateTime middle, TimeSpan high) {
+  return high.totalseconds() < totalseconds(middle) < high.totalseconds();
 }
 
 /**
@@ -637,13 +641,25 @@ void debug() {
   Serial.print(ClockThreshUp.minutes(), DEC);
   Serial.print(':');
   Serial.print(ClockThreshUp.seconds(), DEC);
+  Serial.print(" (");
+  Serial.print(ClockThreshUp.totalseconds(), DEC);
+  Serial.print(")");
   Serial.print(" ClockThreshDown=");
   Serial.print(ClockThreshDown.hours(), DEC);
   Serial.print(':');
   Serial.print(ClockThreshDown.minutes(), DEC);
   Serial.print(':');
   Serial.print(ClockThreshDown.seconds(), DEC);
+  Serial.print(" (");
+  Serial.print(ClockThreshDown.totalseconds(), DEC);
+  Serial.print(")");
 
+  Serial.print(" totalseconds(Now)=");
+  Serial.print(totalseconds(Now), DEC);
+
+  Serial.print(" ShouldOpen=");
+  Serial.print(between(ClockThreshDown, Now, ClockThreshUp));
+  
   Serial.print(" CurrentMode=");
   Serial.print(prettyMode());
 
@@ -651,6 +667,9 @@ void debug() {
   Serial.print(prettyDoorPosition());
   Serial.print(" DoorDirection=");
   Serial.print(prettyDoorDirection());
+
+  Serial.print(" MotorEnabled=");
+  Serial.print(MotorEnabled);
   
   Serial.println();
 }
