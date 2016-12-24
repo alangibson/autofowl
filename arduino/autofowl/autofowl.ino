@@ -165,8 +165,11 @@ void setup() {
   // Start the Real Time Clock
   Wire.begin();
   RTC.begin();
-  // This will reflect the time that your sketch was compiled
-  RTC.adjust(DateTime(__DATE__, __TIME__));
+  // Check to see if the RTC is keeping time.  If it is, load the time from your computer.
+  if (! RTC.isrunning()) {
+    // This will reflect the time that your sketch was compiled
+    RTC.adjust(DateTime(__DATE__, __TIME__));
+  }
 
   // Read clock settings from EEPROM
   byte clockHourThreshUp = EEPROM.read(CLOCK_HOUR_THRESH_UP_ADDRESS);
