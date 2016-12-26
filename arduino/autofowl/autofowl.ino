@@ -368,13 +368,17 @@ void handleTriggers() {
   }
 
   // Determine if door should move up or down
-  if ( LightCurrent > LightThreshUp || between(ClockThreshDown, Now, ClockThreshUp) ) {
+  if ( DoorPosition != DOOR_POSITION_UP && (
+        ( between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent > LightThreshDown ) ||
+        ( ! between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent > LightThreshUp )
+       )
+    ) {
     
     // See if we could potentially change door position
     // If not, there's nothing else to do here
-    if ( DoorPosition == DOOR_POSITION_UP ) {
-      return;
-    }
+    // if ( DoorPosition == DOOR_POSITION_UP ) {
+    //   return;
+    // }
   
     LightThreshTicks++;
     updateLCD();
@@ -384,7 +388,11 @@ void handleTriggers() {
       // Done moving door so reset ticks
       LightThreshTicks = 0;
     }
-  } else if ( LightCurrent < LightThreshDown || ! between(ClockThreshDown, Now, ClockThreshUp) ) {
+  } else if ( DoorPosition != DOOR_POSITION_DOWN && (
+      ( ! between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent < LightThreshUp ) || 
+      ( between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent < LightThreshDown ) 
+    )
+  ) {
 
     // See if we could potentially change door position
     // If not, there's nothing else to do here
@@ -660,9 +668,6 @@ void debug() {
   Serial.print(" totalseconds(Now)=");
   Serial.print(totalseconds(Now), DEC);
 
-  Serial.print(" ShouldOpen=");
-  Serial.print(between(ClockThreshDown, Now, ClockThreshUp));
-  
   Serial.print(" CurrentMode=");
   Serial.print(prettyMode());
 
