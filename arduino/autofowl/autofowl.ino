@@ -353,6 +353,11 @@ void handleButtonDown() {
   }
 }
 
+/*
+ * Possibly change state based on time and light level triggers. 
+ * 
+ * Truth tables are intentionally worked out as long form conditions for the sake of clarity.
+ */
 void handleTriggers() {
 
   updateLight();
@@ -367,19 +372,21 @@ void handleTriggers() {
     return;
   }
 
+  // LightCurrent > LightThreshDown
+  // LightCurrent > LightThreshUp
+  // ClockThreshDown, Now, ClockThreshUp
+  // high.totalseconds() < totalseconds(Now) < high.totalseconds();
+
   // Determine if door should move up or down
   if ( DoorPosition != DOOR_POSITION_UP && (
-        ( between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent > LightThreshDown ) ||
-        ( ! between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent > LightThreshUp )
-       )
-    ) {
+       ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+       ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+       // Ambiguous. Open when clock says to open, but there is not enough light to trigger an open
+       ( LightCurrent < LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() ) ||
+       ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() )
+     )
+  ) {
     
-    // See if we could potentially change door position
-    // If not, there's nothing else to do here
-    // if ( DoorPosition == DOOR_POSITION_UP ) {
-    //   return;
-    // }
-  
     LightThreshTicks++;
     updateLCD();
     if ( LightThreshTicks > LIGHT_THRESH_TICKS_TO_CHANGE ) {
@@ -389,16 +396,18 @@ void handleTriggers() {
       LightThreshTicks = 0;
     }
   } else if ( DoorPosition != DOOR_POSITION_DOWN && (
-      ( ! between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent < LightThreshUp ) || 
-      ( between(ClockThreshDown, Now, ClockThreshUp) && LightCurrent < LightThreshDown ) 
+      ( LightCurrent < LightThreshUp && LightCurrent < LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() ) ||
+      ( LightCurrent < LightThreshUp && LightCurrent < LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+      ( LightCurrent < LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() ) ||
+      ( LightCurrent < LightThreshUp && LightCurrent < LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+      // Ambiguous. Close when light says to be closed, but clock says to open. 
+      ( LightCurrent < LightThreshUp && LightCurrent < LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() ) ||
+      // Ambiguous. Clock says close, while light is low, but not not yet low enough to trigger close.
+      ( LightCurrent < LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+      // Ambiguous. Close when light says to open, but clock says to close. Prevents door staying open if light sensor is faulty.
+      ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() )
     )
   ) {
-
-    // See if we could potentially change door position
-    // If not, there's nothing else to do here
-    if ( DoorPosition == DOOR_POSITION_DOWN ) {
-      return;
-    }
 
     LightThreshTicks++;
     updateLCD();
