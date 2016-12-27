@@ -40,3 +40,15 @@ Upload sketch
 Listen to serial
 
     cu -l /dev/ttyACM* -s 9600
+
+## Schematics
+
+### Eagle libraries
+
+https://cdn.sparkfun.com/datasheets/BreakoutBoards/RTC-Module.v14.zip
+https://www.element14.com/community/docs/DOC-64306
+
+## Development
+
+Time | Light
+ gt 
