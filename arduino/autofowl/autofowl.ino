@@ -5,7 +5,10 @@
 #include <Wire.h>
 #include <RTClib.h>
 
-#define DEBUG 1
+#define DEBUG 0
+// Set to 1 if you want to force setting of RTC to compilation time.
+// You probably want to set this back to 0 then reflash the device when done.
+#define FORCE_SET_RTC 0
 
 // --------------------------------------
 // -- Constants
@@ -16,6 +19,7 @@ const int NONE                              = -1;
 const int TICK                              = 150; // microseconds
 const byte EEPROM_UNINIT_VALUE              = -1;
 
+// Button positions
 const int BUTTON_UP                         = LOW;
 const int BUTTON_DOWN                       = HIGH;
 
@@ -56,11 +60,12 @@ const int CLOCK_MIN_THRESH_DOWN_ADDRESS     = 8;
 const int EEPROM_UNSET                      = 255;
 
 // Motor constants
-const int MOTOR_MAX_RPMS                    = 60;
+const int MOTOR_MAX_RPMS                    = 150;
 const int STEPS_PER_REVOLUTION              = 200;
 const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
-const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
-// Disable motor driver when stopped. Decreases power consumption and heat from motor. 0 = no, 1 = yes.
+const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 60;
+// Disable motor driver when stopped. 
+// Decreases power consumption and heat from motor.
 const bool MOTOR_DISABLE_ON_STOP            = true;
 
 // Number of ticks beyond threshold to wait before changing door position
@@ -72,8 +77,9 @@ const int LIGHT_THRESH_CHANGE_INCREMENT     = 20;
 const int CLOCK_MIN_INCREMENT               = 15;
 
 // Door-specific constants
-// Number of revolutions to fully change door position
-const int REVOLUTIONS_TO_CHANGE             = 100;
+// Number of revolutions needed to change door position
+// Should be empirically determined since it depends on lenght of thread rod.
+const long REVOLUTIONS_TO_CHANGE             = 170;
 
 // Pins
 // Arduino Uno / Buttons
@@ -115,15 +121,15 @@ int ModeButtonLastState   = BUTTON_UP;
 // Used for light sensor
 int LightCurrent          = 0;             // Current reading
 int LightLast             = LightCurrent;  // Last reading
-int LightThreshUp         = 400;
-int LightThreshDown       = 100;
+int LightThreshUp         = 400;           // Light threshold above which we open door
+int LightThreshDown       = 100;           // Light threshold below which we close door
 int LightThreshTicks      = 0;             // Ticks needed to start door position change
 // Used for clock
 DateTime Now;
-TimeSpan ClockThreshUp;
-TimeSpan ClockThreshDown;
-// Is motor enabled or not
-bool MotorEnabled;
+TimeSpan ClockThreshUp;                    // Time above which we open door
+TimeSpan ClockThreshDown;                  // Time below which we close door
+// Used for motor 
+bool MotorEnabled;                         // Is motor enabled or not?
 
 // Initialize the LCD
 LiquidCrystal Lcd(PIN_LCD_RS, PIN_LCD_ENABLE, PIN_LCD_D4, PIN_LCD_D5, PIN_LCD_D6, PIN_LCD_D7);
@@ -134,6 +140,7 @@ AccelStepper Motor(AccelStepper::FULL4WIRE, PIN_MOTOR_1, PIN_MOTOR_2, PIN_MOTOR_
 // Declare the clock
 RTC_DS1307 RTC;
 
+// Setup function run when device is powered on
 void setup() {
 
   // initialize serial and wait for port to open:
@@ -160,7 +167,7 @@ void setup() {
   // set up the LCD's number of columns and rows:
   Lcd.begin(16, 2);
   // Print a message to the LCD.
-  Lcd.print("AutoFowl v2.0");
+  Lcd.print("AutoFowl v2.1");
 
   // Start the Real Time Clock
   Wire.begin();
@@ -168,8 +175,21 @@ void setup() {
   // Check to see if the RTC is keeping time.  If it is, load the time from your computer.
   if (! RTC.isrunning()) {
     // This will reflect the time that your sketch was compiled
-    RTC.adjust(DateTime(__DATE__, __TIME__));
+    DateTime defaultDatetime = DateTime(__DATE__, __TIME__);
+    RTC.adjust(defaultDatetime);
+    // Print warning
+    Serial.println("RTC is NOT running!");
   }
+  #if FORCE_SET_RTC
+  RTC.adjust(DateTime(__DATE__, __TIME__));
+  #endif
+  updateTime();
+  Lcd.setCursor(0, 1);
+  Lcd.print(Now.hour());
+  Lcd.print(':');
+  Lcd.print(Now.minute());
+  Lcd.print(':');
+  Lcd.print(Now.second());
 
   // Read clock settings from EEPROM
   byte clockHourThreshUp = EEPROM.read(CLOCK_HOUR_THRESH_UP_ADDRESS);
@@ -178,19 +198,19 @@ void setup() {
   byte clockMinThreshDown = EEPROM.read(CLOCK_MIN_THRESH_DOWN_ADDRESS);
   ClockThreshUp = TimeSpan(
     0, // days
-    clockHourThreshUp == EEPROM_UNINIT_VALUE ? 0 : clockHourThreshUp,
-    clockMinThreshUp == EEPROM_UNINIT_VALUE ? 0 : clockMinThreshUp ,
+    clockHourThreshUp == EEPROM_UNINIT_VALUE ? 0 : clockHourThreshUp, // hours
+    clockMinThreshUp == EEPROM_UNINIT_VALUE ? 0 : clockMinThreshUp ,  // minutes
     0 // seconds
   );
   ClockThreshDown = TimeSpan(
     0, // days
-    clockHourThreshDown == EEPROM_UNINIT_VALUE ? 0 : clockHourThreshDown,
-    clockMinThreshDown == EEPROM_UNINIT_VALUE ? 0 : clockMinThreshDown,
+    clockHourThreshDown == EEPROM_UNINIT_VALUE ? 0 : clockHourThreshDown, // hours
+    clockMinThreshDown == EEPROM_UNINIT_VALUE ? 0 : clockMinThreshDown,   // minutes
     0 // seconds
   );
 
   // Set the motors desired constant speed in steps per second
-  Motor.setMaxSpeed( MOTOR_SPEED_STEPS_PER_SECOND );
+  Motor.setMaxSpeed(MOTOR_SPEED_STEPS_PER_SECOND);
   // Set the motors desired acceleration in steps per second per second
   Motor.setAcceleration(MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC);
 
@@ -213,11 +233,19 @@ void setup() {
     CurrentMode = MODE_AUTO;
   }
 
+  // Read threshold settings from EEPROM
+  byte lightThreshUp = EEPROM.read(LIGHT_THRESH_UP_ADDRESS);
+  LightThreshUp = lightThreshUp == EEPROM_UNINIT_VALUE ? 400 : lightThreshUp;
+  byte lightThreshDown = EEPROM.read(LIGHT_THRESH_DOWN_ADDRESS);
+  LightThreshDown = lightThreshDown == EEPROM_UNINIT_VALUE ? 100 : lightThreshDown;
+  
   // Display greeting on LCD for 1 second
   delay(1000);
   updateLCD();
+
 }
 
+// Main program loop
 void loop() {
 
   // Handle pressed buttons
@@ -234,6 +262,7 @@ void loop() {
   delay(TICK);
 }
 
+// Main button handling function
 void handleButton() {
   int button = pressedButton();
   if ( button == PIN_MODE_BUTTON ) {
@@ -307,8 +336,10 @@ void handleButtonUp() {
     }
   } else if ( CurrentMode == MODE_SET_OPEN_THRESH ) {
     LightThreshUp += LIGHT_THRESH_CHANGE_INCREMENT;
+    EEPROM.write(LIGHT_THRESH_UP_ADDRESS, LightThreshUp);  
   } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
     LightThreshDown += LIGHT_THRESH_CHANGE_INCREMENT;
+    EEPROM.write(LIGHT_THRESH_DOWN_ADDRESS, LightThreshDown);
   } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH ) {
     ClockThreshDown = TimeSpan(0, ClockThreshDown.hours() + 1, ClockThreshDown.minutes(), 0);
     EEPROM.write(CLOCK_HOUR_THRESH_DOWN_ADDRESS, ClockThreshDown.hours());
@@ -336,8 +367,10 @@ void handleButtonDown() {
     }
   } else if ( CurrentMode == MODE_SET_OPEN_THRESH ) {
     LightThreshUp -= LIGHT_THRESH_CHANGE_INCREMENT;
+    EEPROM.write(LIGHT_THRESH_UP_ADDRESS, LightThreshUp);  
   } else if ( CurrentMode == MODE_SET_CLOSE_THRESH ) {
     LightThreshDown -= LIGHT_THRESH_CHANGE_INCREMENT;
+    EEPROM.write(LIGHT_THRESH_DOWN_ADDRESS, LightThreshDown);  
   } else if ( CurrentMode == MODE_SET_CLOCK_CLOSE_HOUR_THRESH ) {
     ClockThreshDown = TimeSpan(0, ClockThreshDown.hours() - 1, ClockThreshDown.minutes(), 0);
     EEPROM.write(CLOCK_HOUR_THRESH_DOWN_ADDRESS, ClockThreshDown.hours());
@@ -372,21 +405,19 @@ void handleTriggers() {
     return;
   }
 
-  // LightCurrent > LightThreshDown
-  // LightCurrent > LightThreshUp
-  // ClockThreshDown, Now, ClockThreshUp
-  // high.totalseconds() < totalseconds(Now) < high.totalseconds();
-
   // Determine if door should move up or down
   if ( DoorPosition != DOOR_POSITION_UP && (
+       // Open when light says to open but clock says to close
        ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
+       // Open when light says to open but clock says to close
        ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) > ClockThreshDown.totalseconds() ) ||
-       // Ambiguous. Open when clock says to open, but there is not enough light to trigger an open
+       // Ambiguous. Open when clock says to open, but there isn't enough light to trigger an open
        ( LightCurrent < LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() ) ||
+       // Open when both light and clock say to open
        ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) > ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() )
      )
-  ) {
-    
+  )
+  { // We should open
     LightThreshTicks++;
     updateLCD();
     if ( LightThreshTicks > LIGHT_THRESH_TICKS_TO_CHANGE ) {
@@ -407,8 +438,8 @@ void handleTriggers() {
       // Ambiguous. Close when light says to open, but clock says to close. Prevents door staying open if light sensor is faulty.
       ( LightCurrent > LightThreshUp && LightCurrent > LightThreshDown && totalseconds(Now) < ClockThreshUp.totalseconds() && totalseconds(Now) < ClockThreshDown.totalseconds() )
     )
-  ) {
-
+  )
+  { // We should close
     LightThreshTicks++;
     updateLCD();
     if ( LightThreshTicks > LIGHT_THRESH_TICKS_TO_CHANGE ) {
@@ -418,9 +449,14 @@ void handleTriggers() {
       LightThreshTicks = 0;
     }
   } else {
+    // We shouldn't move, so reset timer
     LightThreshTicks = 0;
   }
 }
+
+//
+// Sensor input functions
+//
 
 // Read light sensor and set global var
 void updateLight() {
@@ -428,10 +464,16 @@ void updateLight() {
   LightCurrent = analogRead(PIN_PHOTOCELL);
 }
 
+// Read clock time and set global var
 void updateTime() {
   Now = RTC.now();
 }
 
+//
+// Door moving functions
+//
+
+// Ensures door is open
 void openDoor() {
   // If door is already up, just return
   if ( DoorPosition == DOOR_POSITION_UP ) {
@@ -440,6 +482,7 @@ void openDoor() {
   moveDoorUp(REVOLUTIONS_TO_CHANGE);
 }
 
+// Ensures door is closed
 void closeDoor() {
   // If door is already down, just return
   if ( DoorPosition == DOOR_POSITION_DOWN ) {
@@ -448,14 +491,14 @@ void closeDoor() {
   moveDoorDown(REVOLUTIONS_TO_CHANGE);
 }
 
-void moveDoorUp(int revolutions) {
+void moveDoorUp(long revolutions) {
   updateDoorStatus(DOOR_MOVING_UP, DOOR_POSITION_UNKNOWN);
   moveDoor(revolutions);
   updateDoorStatus(DOOR_STATIONARY, DOOR_POSITION_UP);
 }
 
 // Start moving door down
-void moveDoorDown(int revolutions) {
+void moveDoorDown(long revolutions) {
   updateDoorStatus(DOOR_MOVING_DOWN, DOOR_POSITION_UNKNOWN);
   moveDoor(-revolutions);
   updateDoorStatus(DOOR_STATIONARY, DOOR_POSITION_DOWN);
@@ -463,9 +506,10 @@ void moveDoorDown(int revolutions) {
 
 // Moves door either up or down.
 // If revolutions is positive, door goes up; if negative, door goes down.
-void moveDoor(int revolutions) {
+void moveDoor(long revolutions) {
   // Set the motor target position i.e. number of steps to move
-  Motor.move(revolutions * (long) STEPS_PER_REVOLUTION);
+  long revs = revolutions * STEPS_PER_REVOLUTION;
+  Motor.move(revs);
 
   enableMotor();
 
@@ -500,11 +544,30 @@ void stopDoor() {
   EEPROM.write(DOOR_POSITION_ADDRESS, DoorPosition);
 }
 
+// Returns true if door is currently moving
+bool doorIsMoving() {
+  return ( DoorDirection != DOOR_STATIONARY );
+}
+
+// Update current door status global vars, EEPROM values, and LCD display
+void updateDoorStatus(int doorMoving, int doorPosition) {
+  DoorDirection = doorMoving;
+  DoorPosition = doorPosition;
+  EEPROM.write(DOOR_POSITION_ADDRESS, doorPosition);
+  updateLCD();
+}
+
+//
+// Motor control functions
+//
+
+// Enable door motor
 void enableMotor() {
   MotorEnabled = 1;
   digitalWrite(PIN_MOTOR_ENABLE, 1);
 }
 
+// Disable door motor
 void disableMotor() {
   MotorEnabled = 0;
   if (MOTOR_DISABLE_ON_STOP) {
@@ -512,16 +575,9 @@ void disableMotor() {
   }
 }
 
-bool doorIsMoving() {
-  return ( DoorDirection != DOOR_STATIONARY );
-}
-
-void updateDoorStatus(int doorMoving, int doorPosition) {
-  DoorDirection = doorMoving;
-  DoorPosition = doorPosition;
-  EEPROM.write(DOOR_POSITION_ADDRESS, doorPosition);
-  updateLCD();
-}
+//
+// LCD functions
+//
 
 // Update LCD with current status
 void updateLCD() {
@@ -627,13 +683,19 @@ int prettyTicksToChange() {
   return ( LightThreshTicks / (float) LIGHT_THRESH_TICKS_TO_CHANGE ) * 10;
 }
 
+// Transforms a timestamp into number of seconds
 int32_t totalseconds(DateTime timestamp) {
   return ( (int32_t)timestamp.hour() * 3600 ) + ( (int32_t)timestamp.minute() * 60 ) + timestamp.second();
 }
 
+// Returns true if time is between two times
 bool between(TimeSpan low, DateTime middle, TimeSpan high) {
   return high.totalseconds() < totalseconds(middle) < high.totalseconds();
 }
+
+//
+// Debugging functions
+//
 
 /**
  * Writes debug info to serial
@@ -648,46 +710,45 @@ void debug() {
   Serial.print(Now.second(), DEC);
   Serial.print(']');
 
-  Serial.print(" LightThreshUp=");
-  Serial.print(LightThreshUp);
-  Serial.print(" LightThreshDown=");
-  Serial.print(LightThreshDown);
-  Serial.print(" LightCurrent=");
-  Serial.print(LightCurrent);
+  Serial.print(" LightThreshUp=");        Serial.print(LightThreshUp);
+  Serial.print(" LightThreshDown=");      Serial.print(LightThreshDown);
+  Serial.print(" LightCurrent=");         Serial.print(LightCurrent);
 
   Serial.print(" ClockThreshUp=");
-  Serial.print(ClockThreshUp.hours(), DEC);
-  Serial.print(':');
-  Serial.print(ClockThreshUp.minutes(), DEC);
-  Serial.print(':');
-  Serial.print(ClockThreshUp.seconds(), DEC);
-  Serial.print(" (");
-  Serial.print(ClockThreshUp.totalseconds(), DEC);
-  Serial.print(")");
+    Serial.print(ClockThreshUp.hours(), DEC);
+    Serial.print(':');
+    Serial.print(ClockThreshUp.minutes(), DEC);
+    Serial.print(':');
+    Serial.print(ClockThreshUp.seconds(), DEC);
+    Serial.print(" (");
+    Serial.print(ClockThreshUp.totalseconds(), DEC);
+    Serial.print(")");
   Serial.print(" ClockThreshDown=");
-  Serial.print(ClockThreshDown.hours(), DEC);
-  Serial.print(':');
-  Serial.print(ClockThreshDown.minutes(), DEC);
-  Serial.print(':');
-  Serial.print(ClockThreshDown.seconds(), DEC);
-  Serial.print(" (");
-  Serial.print(ClockThreshDown.totalseconds(), DEC);
-  Serial.print(")");
+    Serial.print(ClockThreshDown.hours(), DEC);
+    Serial.print(':');
+    Serial.print(ClockThreshDown.minutes(), DEC);
+    Serial.print(':');
+    Serial.print(ClockThreshDown.seconds(), DEC);
+    Serial.print(" (");
+    Serial.print(ClockThreshDown.totalseconds(), DEC);
+    Serial.print(")");
 
-  Serial.print(" totalseconds(Now)=");
-  Serial.print(totalseconds(Now), DEC);
+  Serial.print(" totalseconds(Now)=");    Serial.print(totalseconds(Now), DEC);
 
-  Serial.print(" CurrentMode=");
-  Serial.print(prettyMode());
+  Serial.print(" CurrentMode=");          Serial.print(prettyMode());
 
-  Serial.print(" DoorPosition=");
-  Serial.print(prettyDoorPosition());
-  Serial.print(" DoorDirection=");
-  Serial.print(prettyDoorDirection());
+  Serial.print(" DoorPosition=");         Serial.print(prettyDoorPosition());
+  Serial.print(" DoorDirection=");        Serial.print(prettyDoorDirection());
 
-  Serial.print(" MotorEnabled=");
-  Serial.print(MotorEnabled);
-  
+  Serial.print(" MotorEnabled=");         Serial.print(MotorEnabled);
+
+  Serial.print(" UpButtonState=");        Serial.print(UpButtonState);
+  Serial.print(" UpButtonLastState=");    Serial.print(UpButtonLastState);
+  Serial.print(" DownButtonState=");      Serial.print(DownButtonState);
+  Serial.print(" DownButtonLastState=");  Serial.print(DownButtonLastState);
+  Serial.print(" ModeButtonState=");      Serial.print(ModeButtonState);
+  Serial.print(" ModeButtonLastState=");  Serial.print(ModeButtonLastState);
+
   Serial.println();
 }
 #endif
