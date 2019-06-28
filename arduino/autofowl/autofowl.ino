@@ -5,7 +5,7 @@
 #include <Wire.h>
 #include <RTClib.h>
 
-#define DEBUG 0
+#define DEBUG 1
 // Set to 1 if you want to force setting of RTC to compilation time.
 // You probably want to set this back to 0 then reflash the device when done.
 #define FORCE_SET_RTC 0
@@ -57,13 +57,16 @@ const int CLOCK_HOUR_THRESH_UP_ADDRESS      = 5;
 const int CLOCK_MIN_THRESH_UP_ADDRESS       = 6;
 const int CLOCK_HOUR_THRESH_DOWN_ADDRESS    = 7;
 const int CLOCK_MIN_THRESH_DOWN_ADDRESS     = 8;
+const int REVOLUTIONS_TO_MOVE_ADDRESS       = 9;
 const int EEPROM_UNSET                      = 255;
 
 // Motor constants
-const int MOTOR_MAX_RPMS                    = 150;
+// const int MOTOR_MAX_RPMS                    = 150;
+const int MOTOR_MAX_RPMS                    = 60;
 const int STEPS_PER_REVOLUTION              = 200;
 const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
-const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 60;
+// const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 60;
+const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
 // Disable motor driver when stopped. 
 // Decreases power consumption and heat from motor.
 const bool MOTOR_DISABLE_ON_STOP            = true;
@@ -78,8 +81,8 @@ const int CLOCK_MIN_INCREMENT               = 15;
 
 // Door-specific constants
 // Number of revolutions needed to change door position
-// Should be empirically determined since it depends on lenght of thread rod.
-const long REVOLUTIONS_TO_CHANGE             = 170;
+// Should be empirically determined since it depends on length of thread rod.
+const long REVOLUTIONS_TO_CHANGE            = 100;
 
 // Pins
 // Arduino Uno / Buttons
@@ -130,6 +133,7 @@ TimeSpan ClockThreshUp;                    // Time above which we open door
 TimeSpan ClockThreshDown;                  // Time below which we close door
 // Used for motor 
 bool MotorEnabled;                         // Is motor enabled or not?
+long RevolutionsToChange  = REVOLUTIONS_TO_CHANGE;
 
 // Initialize the LCD
 LiquidCrystal Lcd(PIN_LCD_RS, PIN_LCD_ENABLE, PIN_LCD_D4, PIN_LCD_D5, PIN_LCD_D6, PIN_LCD_D7);
@@ -226,7 +230,7 @@ void setup() {
     CurrentMode = MODE_MANUAL;
   }
 
-  // Read current mode from eeprom
+  // Read current mode from EEPROM
   CurrentMode = EEPROM.read(CURRENT_MODE_ADDRESS);
   // Make sure value is in legal range. If not, fall back to AUTO mode
   if (CurrentMode > MODE_MAX || CurrentMode < MODE_MIN ) {
@@ -239,10 +243,13 @@ void setup() {
   byte lightThreshDown = EEPROM.read(LIGHT_THRESH_DOWN_ADDRESS);
   LightThreshDown = lightThreshDown == EEPROM_UNINIT_VALUE ? 100 : lightThreshDown;
   
+  // Read revolutions to change from EEPROM
+  long revolutionsToChange = EEPROM.read(REVOLUTIONS_TO_MOVE_ADDRESS);
+  RevolutionsToChange = revolutionsToChange == EEPROM_UNINIT_VALUE ? REVOLUTIONS_TO_CHANGE : revolutionsToChange;
+
   // Display greeting on LCD for 1 second
   delay(1000);
   updateLCD();
-
 }
 
 // Main program loop
@@ -479,7 +486,7 @@ void openDoor() {
   if ( DoorPosition == DOOR_POSITION_UP ) {
     return;
   }
-  moveDoorUp(REVOLUTIONS_TO_CHANGE);
+  moveDoorUp(RevolutionsToChange);
 }
 
 // Ensures door is closed
@@ -488,7 +495,7 @@ void closeDoor() {
   if ( DoorPosition == DOOR_POSITION_DOWN ) {
     return;
   }
-  moveDoorDown(REVOLUTIONS_TO_CHANGE);
+  moveDoorDown(RevolutionsToChange);
 }
 
 void moveDoorUp(long revolutions) {
@@ -508,12 +515,18 @@ void moveDoorDown(long revolutions) {
 // If revolutions is positive, door goes up; if negative, door goes down.
 void moveDoor(long revolutions) {
   // Set the motor target position i.e. number of steps to move
-  long revs = revolutions * STEPS_PER_REVOLUTION;
-  Motor.move(revs);
-
-  enableMotor();
+  long stepsToMove = revolutions * STEPS_PER_REVOLUTION;
+  Motor.move(stepsToMove);
+  
+  // Local step counter
+  long stepsMoved = 0;
 
   // Start stepping motor
+  Serial.print("Starting to take steps: ");
+  Serial.print(stepsToMove);
+  Serial.print(" (");
+  Serial.print(revolutions);
+  Serial.println(")");
   while (true) {
 
     // Handle buttons to allow abort
@@ -523,6 +536,16 @@ void moveDoor(long revolutions) {
     if ( DoorDirection == DOOR_STATIONARY ) {
       // Tell AccelStepper to stop and reset its position counter
       Motor.setCurrentPosition(0);
+    
+      // Save number of revolutions we did to EEPROM
+      RevolutionsToChange = stepsMoved / STEPS_PER_REVOLUTION;
+      EEPROM.write(REVOLUTIONS_TO_MOVE_ADDRESS, RevolutionsToChange);
+      Serial.print("User stepsMoved stepping: ");
+      Serial.print(stepsMoved);
+      Serial.print(" (");
+      Serial.print(RevolutionsToChange);
+      Serial.println(")");
+
       // This break is redundant because Motor.run() will return false past here
       break;
     }
@@ -532,6 +555,10 @@ void moveDoor(long revolutions) {
     if ( ! stillRunning )  {
       break;
     }
+
+    // Increment local step counter
+    // stepsMoved++;
+    // Serial.println("step");
   }
 
   disableMotor();
@@ -741,6 +768,7 @@ void debug() {
   Serial.print(" DoorDirection=");        Serial.print(prettyDoorDirection());
 
   Serial.print(" MotorEnabled=");         Serial.print(MotorEnabled);
+  Serial.print(" RevolutionsToChange=");  Serial.print(RevolutionsToChange);
 
   Serial.print(" UpButtonState=");        Serial.print(UpButtonState);
   Serial.print(" UpButtonLastState=");    Serial.print(UpButtonLastState);
