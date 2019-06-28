@@ -5,7 +5,7 @@
 #include <Wire.h>
 #include <RTClib.h>
 
-#define DEBUG 1
+#define DEBUG 0
 // Set to 1 if you want to force setting of RTC to compilation time.
 // You probably want to set this back to 0 then reflash the device when done.
 #define FORCE_SET_RTC 0
@@ -61,12 +61,10 @@ const int REVOLUTIONS_TO_MOVE_ADDRESS       = 9;
 const int EEPROM_UNSET                      = 255;
 
 // Motor constants
-// const int MOTOR_MAX_RPMS                    = 150;
-const int MOTOR_MAX_RPMS                    = 60;
+const int MOTOR_MAX_RPMS                    = 150;
 const int STEPS_PER_REVOLUTION              = 200;
 const int MOTOR_SPEED_STEPS_PER_SECOND      = ( MOTOR_MAX_RPMS / 60 ) * STEPS_PER_REVOLUTION;
-// const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 60;
-const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 50;
+const int MOTOR_ACCEL_STEPS_PER_SEC_PER_SEC = 60;
 // Disable motor driver when stopped. 
 // Decreases power consumption and heat from motor.
 const bool MOTOR_DISABLE_ON_STOP            = true;
@@ -82,7 +80,7 @@ const int CLOCK_MIN_INCREMENT               = 15;
 // Door-specific constants
 // Number of revolutions needed to change door position
 // Should be empirically determined since it depends on length of thread rod.
-const long REVOLUTIONS_TO_CHANGE            = 100;
+const long REVOLUTIONS_TO_CHANGE            = 170;
 
 // Pins
 // Arduino Uno / Buttons
@@ -244,6 +242,7 @@ void setup() {
   LightThreshDown = lightThreshDown == EEPROM_UNINIT_VALUE ? 100 : lightThreshDown;
   
   // Read revolutions to change from EEPROM
+  // TODO Can we store a long in EEPROM like this?
   long revolutionsToChange = EEPROM.read(REVOLUTIONS_TO_MOVE_ADDRESS);
   RevolutionsToChange = revolutionsToChange == EEPROM_UNINIT_VALUE ? REVOLUTIONS_TO_CHANGE : revolutionsToChange;
 
@@ -517,16 +516,19 @@ void moveDoor(long revolutions) {
   // Set the motor target position i.e. number of steps to move
   long stepsToMove = revolutions * STEPS_PER_REVOLUTION;
   Motor.move(stepsToMove);
-  
-  // Local step counter
-  long stepsMoved = 0;
+
+  enableMotor();
+
+  long startPosition = Motor.currentPosition();
 
   // Start stepping motor
+  #if DEBUG
   Serial.print("Starting to take steps: ");
   Serial.print(stepsToMove);
   Serial.print(" (");
   Serial.print(revolutions);
   Serial.println(")");
+  #endif
   while (true) {
 
     // Handle buttons to allow abort
@@ -534,17 +536,20 @@ void moveDoor(long revolutions) {
 
     // Eject from loop if we stopped the door manually via handleButton() calling stopDoor()
     if ( DoorDirection == DOOR_STATIONARY ) {
-      // Tell AccelStepper to stop and reset its position counter
-      Motor.setCurrentPosition(0);
-    
       // Save number of revolutions we did to EEPROM
+      long stepsMoved = abs(max(startPosition, Motor.currentPosition()) - min(startPosition, Motor.currentPosition()));      
       RevolutionsToChange = stepsMoved / STEPS_PER_REVOLUTION;
       EEPROM.write(REVOLUTIONS_TO_MOVE_ADDRESS, RevolutionsToChange);
-      Serial.print("User stepsMoved stepping: ");
+      #if DEBUG
+      Serial.print("User stopped stepping at: ");
       Serial.print(stepsMoved);
       Serial.print(" (");
       Serial.print(RevolutionsToChange);
       Serial.println(")");
+      #endif
+
+      // Tell AccelStepper to stop and reset its position counter
+      Motor.setCurrentPosition(0);
 
       // This break is redundant because Motor.run() will return false past here
       break;
@@ -555,10 +560,7 @@ void moveDoor(long revolutions) {
     if ( ! stillRunning )  {
       break;
     }
-
-    // Increment local step counter
-    // stepsMoved++;
-    // Serial.println("step");
+    
   }
 
   disableMotor();
